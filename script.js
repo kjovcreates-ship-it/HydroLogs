@@ -1,3 +1,21 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js"
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-auth.js"
+import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js"
+
+/* ── Firebase config ── */
+const firebaseConfig = {
+  apiKey: "AIzaSyCx9vhsfwbfEaeJ5hsZNX33I_Duc3Ja8FA",
+  authDomain: "water-tracker-2d1dc.firebaseapp.com",
+  projectId: "water-tracker-2d1dc",
+  storageBucket: "water-tracker-2d1dc.firebasestorage.app",
+  messagingSenderId: "997958844208",
+  appId: "1:997958844208:web:e014bfa3623c3a96e212f5"
+}
+
+const app = initializeApp(firebaseConfig)
+const auth = getAuth(app)
+const db = getFirestore(app)
+
 /* ── Config ── */
 const PRESETS = [150, 250, 350, 500]
 const DEFAULT_GOAL = 2000
@@ -5,6 +23,7 @@ const DEFAULT_GOAL = 2000
 /* ── State ── */
 let entries = []
 let goal = DEFAULT_GOAL
+let currentUser = null
 
 /* ── Date helpers ── */
 const getTodayStr = () => {
@@ -13,54 +32,72 @@ const getTodayStr = () => {
 }
 
 const getPrevDay = (dateStr) => {
-  const d = new Date(dateStr)
+  const d = new Date(dateStr + 'T00:00:00')
   d.setDate(d.getDate() - 1)
   return d.toISOString().slice(0, 10)
 }
 
-/* ── Storage helpers ── */
-const loadDay = (dateStr) => {
+/* ── Firestore helpers ── */
+const loadDay = async (dateStr) => {
+  if (!currentUser) return null
   try {
-    const raw = localStorage.getItem(`water:${dateStr}`)
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
+    const ref = doc(db, 'users', currentUser.uid, 'logs', dateStr)
+    const snap = await getDoc(ref)
+    return snap.exists() ? snap.data() : null
+  } catch { return null }
 }
 
-const saveDay = (dateStr, data) => {
-  localStorage.setItem(`water:${dateStr}`, JSON.stringify(data))
+const saveDay = async (dateStr, data) => {
+  if (!currentUser) return
+  try {
+    const ref = doc(db, 'users', currentUser.uid, 'logs', dateStr)
+    await setDoc(ref, data)
+  } catch (e) { console.error('Save error:', e) }
 }
 
-const persistToday = () => {
-  saveDay(getTodayStr(), { entries, goal })
+const loadGoalFromDB = async () => {
+  if (!currentUser) return DEFAULT_GOAL
+  try {
+    const ref = doc(db, 'users', currentUser.uid, 'settings', 'goal')
+    const snap = await getDoc(ref)
+    return snap.exists() ? snap.data().value : DEFAULT_GOAL
+  } catch { return DEFAULT_GOAL }
+}
+
+const saveGoalToDB = async (value) => {
+  if (!currentUser) return
+  try {
+    const ref = doc(db, 'users', currentUser.uid, 'settings', 'goal')
+    await setDoc(ref, { value })
+  } catch (e) { console.error('Goal save error:', e) }
+}
+
+const persistToday = async () => {
+  await saveDay(getTodayStr(), { entries, goal })
 }
 
 /* ── Streak calculator ── */
-const calcStreak = () => {
+const calcStreak = async () => {
   let streak = 0
   let day = getPrevDay(getTodayStr())
-  for (let i = 0; i < 365; i++) {
-    const data = loadDay(day)
+  for (let i = 0; i < 30; i++) {
+    const data = await loadDay(day)
     if (!data) break
     const tot = (data.entries || []).reduce((s, e) => s + e.amount, 0)
     if (tot >= (data.goal || goal)) {
       streak++
       day = getPrevDay(day)
-    } else {
-      break
-    }
+    } else break
   }
   return streak
 }
 
-/* ── Wave SVG renderer ── */
+/* ── Wave SVG ── */
 const renderWave = (pct) => {
   const reached = pct >= 100
   const y = 100 - Math.min(pct, 100)
   const fill = reached ? '#22c55e' : '#3b82f6'
   const bg   = reached ? '#bbf7d0' : '#bfdbfe'
-
   document.getElementById('wave-bg').setAttribute('fill', bg)
   document.getElementById('wave-back').setAttribute('fill', fill)
   document.getElementById('wave-back').setAttribute('d',
@@ -71,36 +108,30 @@ const renderWave = (pct) => {
 }
 
 /* ── Main render ── */
-const render = () => {
+const render = async () => {
   const total     = entries.reduce((s, e) => s + e.amount, 0)
   const pct       = Math.min(Math.round((total / goal) * 100), 100)
   const remaining = Math.max(goal - total, 0)
   const reached   = total >= goal
 
-  // Wave
   renderWave(pct)
 
-  // Total amount display
   const totalEl = document.getElementById('total-display')
   totalEl.innerHTML = `${total}<span>ml</span>`
   totalEl.className = 'total-display' + (reached ? ' reached' : '')
 
-  // Goal message
   const msgEl = document.getElementById('goal-msg')
   msgEl.textContent = reached ? '🎉 Goal reached! Great job!' : `${remaining} ml to reach your goal`
   msgEl.className = 'goal-msg' + (reached ? ' reached' : '')
 
-  // Progress bar
   const bar = document.getElementById('progress-bar')
   bar.style.width = pct + '%'
   bar.className = 'progress-bar' + (reached ? ' reached' : '')
 
-  // Percentage label & goal button
   document.getElementById('pct-label').textContent = pct + '%'
   document.getElementById('goal-edit-btn').textContent = `Goal: ${goal} ml`
 
-  // Streak badge
-  const streak = calcStreak()
+  const streak = await calcStreak()
   const badge  = document.getElementById('streak-badge')
   if (streak > 0) {
     badge.style.display = 'block'
@@ -109,15 +140,14 @@ const render = () => {
     badge.style.display = 'none'
   }
 
-  // Today's log
   document.getElementById('log-count-label').textContent = `Today's entries (${entries.length})`
   const logList = document.getElementById('log-list')
   if (entries.length === 0) {
     logList.innerHTML = '<div class="empty-msg">No entries yet. Start logging! 💧</div>'
   } else {
     const wrap = document.createElement('div')
-    wrap.className = 'log-list';
-    [...entries].reverse().forEach((entry, ri) => {
+    wrap.className = 'log-list'
+    ;[...entries].reverse().forEach((entry, ri) => {
       const realIndex = entries.length - 1 - ri
       const row = document.createElement('div')
       row.className = 'log-entry'
@@ -136,15 +166,14 @@ const render = () => {
     logList.appendChild(wrap)
   }
 
-  // History
   renderHistory()
 }
 
-/* ── History renderer ── */
-const renderHistory = () => {
+/* ── History ── */
+const renderHistory = async () => {
   const list  = document.getElementById('history-list')
   const today = getTodayStr()
-  list.innerHTML = ''
+  list.innerHTML = '<div class="empty-msg" style="padding:12px 0">Loading history...</div>'
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date()
@@ -152,19 +181,17 @@ const renderHistory = () => {
     return d.toISOString().slice(0, 10)
   }).reverse()
 
-  days.forEach(dateStr => {
-    const data       = loadDay(dateStr)
+  list.innerHTML = ''
+  for (const dateStr of days) {
+    const data       = await loadDay(dateStr)
     const dayEntries = data ? (data.entries || []) : []
     const dayGoal    = data?.goal || goal
     const dayTotal   = dayEntries.reduce((s, e) => s + e.amount, 0)
     const dayPct     = Math.min(Math.round((dayTotal / dayGoal) * 100), 100)
     const isToday    = dateStr === today
     const isReached  = dayTotal >= dayGoal
-
-    const d     = new Date(dateStr + 'T00:00:00')
-    const label = isToday
-      ? 'Today'
-      : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    const d          = new Date(dateStr + 'T00:00:00')
+    const label      = isToday ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 
     const row = document.createElement('div')
     row.innerHTML = `
@@ -180,39 +207,39 @@ const renderHistory = () => {
         <div class="history-bar ${isReached ? 'reached' : ''}" style="width:${dayPct}%"></div>
       </div>`
     list.appendChild(row)
-  })
+  }
 }
 
 /* ── Add water ── */
-const addWater = (amount) => {
+const addWater = async (amount) => {
   const entry = {
     id: Date.now(),
     amount,
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
   entries.push(entry)
-  persistToday()
+  await persistToday()
   render()
 }
 
 /* ── Remove entry ── */
-const removeEntry = (index) => {
+window.removeEntry = async (index) => {
   entries.splice(index, 1)
-  persistToday()
+  await persistToday()
   render()
 }
 
 /* ── Custom amount ── */
-const handleCustomAdd = () => {
+window.handleCustomAdd = async () => {
   const val = parseInt(document.getElementById('custom-input').value)
   if (val > 0 && val <= 5000) {
-    addWater(val)
+    await addWater(val)
     document.getElementById('custom-input').value = ''
   }
 }
 
 document.getElementById('custom-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') handleCustomAdd()
+  if (e.key === 'Enter') window.handleCustomAdd()
 })
 
 /* ── Goal editor ── */
@@ -222,27 +249,27 @@ document.getElementById('goal-edit-btn').addEventListener('click', () => {
   document.getElementById('goal-input').focus()
 })
 
-const saveGoal = () => {
+window.saveGoal = async () => {
   const val = parseInt(document.getElementById('goal-input').value)
   if (val >= 100 && val <= 10000) {
     goal = val
-    localStorage.setItem('water:goal', String(goal))
-    persistToday()
+    await saveGoalToDB(goal)
+    await persistToday()
     render()
   }
-  closeGoalEditor()
+  window.closeGoalEditor()
 }
 
-const closeGoalEditor = () => {
+window.closeGoalEditor = () => {
   document.getElementById('goal-editor').classList.remove('visible')
 }
 
 document.getElementById('goal-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') saveGoal()
+  if (e.key === 'Enter') window.saveGoal()
 })
 
 /* ── Tabs ── */
-const switchTab = (tab) => {
+window.switchTab = (tab) => {
   document.getElementById('panel-today').style.display   = tab === 'today'   ? 'block' : 'none'
   document.getElementById('panel-history').style.display = tab === 'history' ? 'block' : 'none'
   document.getElementById('tab-today').className   = 'tab-btn' + (tab === 'today'   ? ' active' : '')
@@ -254,23 +281,100 @@ PRESETS.forEach(amount => {
   const btn = document.createElement('button')
   btn.className = 'preset-btn'
   btn.textContent = `${amount} ml`
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     btn.classList.add('flash')
     setTimeout(() => btn.classList.remove('flash'), 700)
-    addWater(amount)
+    await addWater(amount)
   })
   document.getElementById('presets-grid').appendChild(btn)
 })
 
-/* ── Set date label ── */
-document.getElementById('date-label').textContent =
-  new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+/* ── Auth: show/hide forms ── */
+window.showAuthTab = (tab) => {
+  document.getElementById('form-login').style.display  = tab === 'login'  ? 'block' : 'none'
+  document.getElementById('form-signup').style.display = tab === 'signup' ? 'block' : 'none'
+  document.getElementById('tab-login').className  = 'auth-tab' + (tab === 'login'  ? ' active' : '')
+  document.getElementById('tab-signup').className = 'auth-tab' + (tab === 'signup' ? ' active' : '')
+  const el = document.getElementById('auth-error')
+  el.textContent = ''
+  el.classList.remove('visible')
+}
 
-/* ── Init: load saved data ── */
-const savedGoal = localStorage.getItem('water:goal')
-if (savedGoal) goal = parseInt(savedGoal)
+const showAuthError = (msg) => {
+  const el = document.getElementById('auth-error')
+  el.textContent = msg
+  el.classList.add('visible')
+}
 
-const todayData = loadDay(getTodayStr())
-if (todayData) entries = todayData.entries || []
+/* ── Sign up ── */
+window.signupUser = async () => {
+  const name     = document.getElementById('signup-name').value.trim()
+  const email    = document.getElementById('signup-email').value.trim()
+  const password = document.getElementById('signup-password').value
 
-render()
+  if (!name) return showAuthError('Please enter your name.')
+  if (!email) return showAuthError('Please enter your email.')
+  if (password.length < 6) return showAuthError('Password must be at least 6 characters.')
+
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, password)
+    await updateProfile(result.user, { displayName: name })
+  } catch (e) {
+    if (e.code === 'auth/email-already-in-use') showAuthError('Email already in use.')
+    else if (e.code === 'auth/invalid-email') showAuthError('Invalid email address.')
+    else showAuthError('Sign up failed. Please try again.')
+  }
+}
+
+/* ── Login ── */
+window.loginUser = async () => {
+  const email    = document.getElementById('login-email').value.trim()
+  const password = document.getElementById('login-password').value
+
+  if (!email || !password) return showAuthError('Please fill in all fields.')
+
+  try {
+    await signInWithEmailAndPassword(auth, email, password)
+  } catch (e) {
+    if (e.code === 'auth/invalid-credential') showAuthError('Wrong email or password.')
+    else showAuthError('Login failed. Please try again.')
+  }
+}
+
+/* ── Logout ── */
+window.logoutUser = async () => {
+  await signOut(auth)
+}
+
+/* ── Auth state listener ── */
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    currentUser = user
+
+    // Show app, hide auth
+    document.getElementById('auth-screen').style.display = 'none'
+    document.getElementById('app-screen').style.display  = 'block'
+
+    // Set user name
+    document.getElementById('user-name-label').textContent = user.displayName || user.email
+
+    // Set date label
+    document.getElementById('date-label').textContent =
+      new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+
+    // Load goal and today's entries
+    goal = await loadGoalFromDB()
+    const todayData = await loadDay(getTodayStr())
+    entries = todayData ? (todayData.entries || []) : []
+
+    render()
+  } else {
+    currentUser = null
+    entries = []
+    goal = DEFAULT_GOAL
+
+    // Show auth, hide app
+    document.getElementById('auth-screen').style.display = 'flex'
+    document.getElementById('app-screen').style.display  = 'none'
+  }
+})
