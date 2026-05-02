@@ -121,7 +121,7 @@ const render = async () => {
   totalEl.className = 'total-display' + (reached ? ' reached' : '')
 
   const msgEl = document.getElementById('goal-msg')
-  msgEl.textContent = reached ? '🎉 Goal reached! Great job!' : `${remaining} ml to reach your goal`
+  msgEl.textContent = reached ? 'Goal reached! Great job!' : `${remaining} ml to reach your goal`
   msgEl.className = 'goal-msg' + (reached ? ' reached' : '')
 
   const bar = document.getElementById('progress-bar')
@@ -143,7 +143,7 @@ const render = async () => {
   document.getElementById('log-count-label').textContent = `Today's entries (${entries.length})`
   const logList = document.getElementById('log-list')
   if (entries.length === 0) {
-    logList.innerHTML = '<div class="empty-msg">No entries yet. Start logging! 💧</div>'
+    logList.innerHTML = '<div class="empty-msg">No entries yet. Start logging!</div>'
   } else {
     const wrap = document.createElement('div')
     wrap.className = 'log-list'
@@ -166,22 +166,141 @@ const render = async () => {
     logList.appendChild(wrap)
   }
 
-  renderHistory()
 }
 
-/* ── History ── */
-const renderHistory = async () => {
+/* ── Calendar state ── */
+let calYear  = new Date().getFullYear()
+let calMonth = new Date().getMonth()
+let rangeStart = null
+let rangeEnd   = null
+
+/* ── Calendar helpers ── */
+const dateStrFromParts = (y, m, d) =>
+  `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+
+const buildCalendar = () => {
+  const today    = getTodayStr()
+  const firstDay = new Date(calYear, calMonth, 1).getDay()
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate()
+
+  document.getElementById('cal-month-label').textContent =
+    new Date(calYear, calMonth, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+
+  const container = document.getElementById('cal-days')
+  container.style.display = 'contents'
+  container.innerHTML = ''
+
+  // Empty cells before first day
+  for (let i = 0; i < firstDay; i++) {
+    const empty = document.createElement('div')
+    empty.className = 'cal-day cal-day-empty'
+    container.appendChild(empty)
+  }
+
+  // Day cells
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr  = dateStrFromParts(calYear, calMonth, d)
+    const isFuture = dateStr > today
+    const isToday  = dateStr === today
+
+    let cls = 'cal-day'
+    if (isFuture) cls += ' cal-day-future'
+    if (isToday)  cls += ' cal-day-today'
+    if (rangeStart && dateStr === rangeStart) cls += ' cal-day-start'
+    if (rangeEnd   && dateStr === rangeEnd)   cls += ' cal-day-end'
+    if (rangeStart && rangeEnd && dateStr > rangeStart && dateStr < rangeEnd)
+      cls += ' cal-day-in-range'
+
+    const btn = document.createElement('button')
+    btn.className = cls
+    btn.textContent = d
+    btn.dataset.date = dateStr
+    if (!isFuture) btn.addEventListener('click', () => onDayClick(dateStr))
+    container.appendChild(btn)
+  }
+
+  updateRangeLabel()
+}
+
+const onDayClick = (dateStr) => {
+  if (!rangeStart || (rangeStart && rangeEnd)) {
+    // Start fresh selection
+    rangeStart = dateStr
+    rangeEnd   = null
+  } else {
+    // Second click — set end
+    if (dateStr < rangeStart) {
+      rangeEnd   = rangeStart
+      rangeStart = dateStr
+    } else {
+      rangeEnd = dateStr
+    }
+  }
+  buildCalendar()
+}
+
+const updateRangeLabel = () => {
+  const label  = document.getElementById('cal-range-label')
+  const btn    = document.getElementById('btn-view-range')
+  const fmt    = (s) => new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+  if (!rangeStart) {
+    label.textContent = 'Select a start date'
+    btn.style.display = 'none'
+  } else if (!rangeEnd) {
+    label.textContent = `From: ${fmt(rangeStart)} — select end date`
+    btn.style.display = 'none'
+  } else {
+    label.textContent = `${fmt(rangeStart)} — ${fmt(rangeEnd)}`
+    btn.style.display = 'block'
+  }
+}
+
+window.calPrevMonth = () => {
+  calMonth--
+  if (calMonth < 0) { calMonth = 11; calYear-- }
+  buildCalendar()
+}
+
+window.calNextMonth = () => {
+  const today = new Date()
+  if (calYear === today.getFullYear() && calMonth >= today.getMonth()) return
+  calMonth++
+  if (calMonth > 11) { calMonth = 0; calYear++ }
+  buildCalendar()
+}
+
+/* ── View selected range ── */
+window.viewRange = async () => {
+  if (!rangeStart || !rangeEnd) return
+  await renderHistory(rangeStart, rangeEnd)
+}
+
+/* ── History renderer ── */
+const renderHistory = async (start, end) => {
   const list  = document.getElementById('history-list')
   const today = getTodayStr()
-  list.innerHTML = '<div class="empty-msg" style="padding:12px 0">Loading history...</div>'
 
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    return d.toISOString().slice(0, 10)
-  }).reverse()
+  if (!start || !end) {
+    list.innerHTML = '<div class="empty-msg">Pick a date range above to view your history.</div>'
+    return
+  }
 
-  list.innerHTML = ''
+  list.innerHTML = '<div class="empty-msg" style="padding:12px 0">Loading...</div>'
+
+  // Build array of all days in range
+  const days = []
+  let cur = new Date(start + 'T00:00:00')
+  const endDate = new Date(end + 'T00:00:00')
+  while (cur <= endDate) {
+    days.push(cur.toISOString().slice(0, 10))
+    cur.setDate(cur.getDate() + 1)
+  }
+
+  let totalOverall = 0
+  let daysHit = 0
+  const rows = []
+
   for (const dateStr of days) {
     const data       = await loadDay(dateStr)
     const dayEntries = data ? (data.entries || []) : []
@@ -193,22 +312,41 @@ const renderHistory = async () => {
     const d          = new Date(dateStr + 'T00:00:00')
     const label      = isToday ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 
+    totalOverall += dayTotal
+    if (isReached) daysHit++
+
+    rows.push({ label, isToday, isReached, dayTotal, dayGoal, dayPct, dateStr })
+  }
+
+  list.innerHTML = ''
+
+  // Summary bar
+  const summary = document.createElement('div')
+  summary.className = 'history-summary'
+  summary.innerHTML = `
+    <span class="history-summary-label">${days.length} days &nbsp;·&nbsp; ${daysHit} goals hit</span>
+    <span class="history-summary-value">${totalOverall.toLocaleString()} ml total</span>`
+  list.appendChild(summary)
+
+  // Individual rows
+  for (const r of rows) {
     const row = document.createElement('div')
     row.innerHTML = `
       <div class="history-row-header">
-        <span class="history-day ${isToday ? 'today' : ''}">
-          ${label}${isToday ? '<span class="history-today-tag">(today)</span>' : ''}
+        <span class="history-day ${r.isToday ? 'today' : ''}">
+          ${r.label}${r.isToday ? '<span class="history-today-tag">(today)</span>' : ''}
         </span>
-        <span class="history-total ${isReached ? 'reached' : ''}">
-          ${dayTotal} / ${dayGoal} ml ${isReached ? '✓' : ''}
+        <span class="history-total ${r.isReached ? 'reached' : ''}">
+          ${r.dayTotal} / ${r.dayGoal} ml ${r.isReached ? '&#10003;' : ''}
         </span>
       </div>
       <div class="history-bar-wrap">
-        <div class="history-bar ${isReached ? 'reached' : ''}" style="width:${dayPct}%"></div>
+        <div class="history-bar ${r.isReached ? 'reached' : ''}" style="width:${r.dayPct}%"></div>
       </div>`
     list.appendChild(row)
   }
 }
+
 
 /* ── Add water ── */
 const addWater = async (amount) => {
@@ -274,6 +412,10 @@ window.switchTab = (tab) => {
   document.getElementById('panel-history').style.display = tab === 'history' ? 'block' : 'none'
   document.getElementById('tab-today').className   = 'tab-btn' + (tab === 'today'   ? ' active' : '')
   document.getElementById('tab-history').className = 'tab-btn' + (tab === 'history' ? ' active' : '')
+  if (tab === 'history') {
+    buildCalendar()
+    renderHistory(null, null)
+  }
 }
 
 /* ── Build preset buttons ── */

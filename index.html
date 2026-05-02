@@ -178,7 +178,41 @@
 
       <!-- History -->
       <div class="card" id="panel-history" style="display:none;">
-        <div class="card-label">Last 7 days</div>
+        <div class="card-label">History</div>
+
+        <!-- Calendar Range Picker -->
+        <div class="calendar-wrap">
+          <!-- Month navigation -->
+          <div class="cal-header">
+            <button class="cal-nav" id="cal-prev" onclick="calPrevMonth()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="cal-month-label" id="cal-month-label"></span>
+            <button class="cal-nav" id="cal-next" onclick="calNextMonth()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+          </div>
+
+          <!-- Day labels -->
+          <div class="cal-grid">
+            <div class="cal-day-label">Su</div>
+            <div class="cal-day-label">Mo</div>
+            <div class="cal-day-label">Tu</div>
+            <div class="cal-day-label">We</div>
+            <div class="cal-day-label">Th</div>
+            <div class="cal-day-label">Fr</div>
+            <div class="cal-day-label">Sa</div>
+            <div id="cal-days"></div>
+          </div>
+
+          <!-- Selected range info & button -->
+          <div class="cal-footer">
+            <span class="cal-range-label" id="cal-range-label">Select a start date</span>
+            <button class="btn-view-range" id="btn-view-range" onclick="viewRange()" style="display:none;">View Range</button>
+          </div>
+        </div>
+
+        <!-- History results -->
         <div class="history-list" id="history-list"></div>
       </div>
 
